@@ -6,10 +6,10 @@ import { OpenAI } from "openai";
 /* ================================================================== */
 /*  CONFIG: change names and text here                                 */
 /* ================================================================== */
-// Put your token in .env.local:  NEXT_PUBLIC_HF_TOKEN=hf_xxx   (then restart `npm run dev`)
+// Real token: set NEXT_PUBLIC_HF_TOKEN in .env.local (and in Vercel > Settings > Environment Variables).
+// The fallback below is a FAKE placeholder so the build works; chat replies need a real token.
 // Anything prefixed NEXT_PUBLIC_ is visible to users in the browser.
-// For production, call the model from an API route (app/api/chat/route.ts) instead.
-const HF_TOKEN = "hf_sFQsPTnAjE9mHMvGjwoPxXRQoSmqSJS6FD";
+const HF_TOKEN = process.env.NEXT_PUBLIC_HF_TOKEN || "hf_sFQsPTnAjE9mHMvGjwoPxXRQoSmqSJS6FD";
 const MODEL = "openai/gpt-oss-120b:fireworks-ai";
 
 const BOT_NAME = "Onyx";
@@ -43,6 +43,21 @@ type Msg = { role: Role; content: string };
 type Chat = { id: string; title: string; sub: string; folderId: string | null; saved: boolean; messages: Msg[] };
 type Folder = { id: string; name: string; color: string };
 
+/* Minimal types for the browser's voice-input API (not in TypeScript's default lib) */
+type SpeechRecognitionLike = {
+  interimResults: boolean;
+  onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
+type SpeechWindow = {
+  SpeechRecognition?: SpeechRecognitionCtor;
+  webkitSpeechRecognition?: SpeechRecognitionCtor;
+};
+
 const DEFAULT_FOLDERS: Folder[] = [
   { id: "f1", name: "Work chats", color: FOLDER_COLORS[0] },
   { id: "f2", name: "Life chats", color: FOLDER_COLORS[1] },
@@ -67,7 +82,7 @@ function readStore<T>(key: string, fallback: T[]): T[] {
     const raw = window.localStorage.getItem(key);
     const v = raw ? JSON.parse(raw) : null;
     return Array.isArray(v) ? (v as T[]) : fallback;
-  } catch (e) {
+  } catch {
     return fallback;
   }
 }
@@ -330,7 +345,7 @@ export default function Page() {
   const endRef = useRef<HTMLDivElement | null>(null);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const nearBottom = useRef(true);
-  const recRef = useRef<any>(null);
+  const recRef = useRef<SpeechRecognitionLike | null>(null);
   const folderRef = useRef<string | null>(null);
   folderRef.current = activeFolder;
 
@@ -383,11 +398,11 @@ export default function Page() {
 
   useEffect(() => {
     if (!loaded) return;
-    try { window.localStorage.setItem(KEY_CHATS, JSON.stringify(chats)); } catch (e) {}
+    try { window.localStorage.setItem(KEY_CHATS, JSON.stringify(chats)); } catch { /* storage unavailable */ }
   }, [chats, loaded]);
   useEffect(() => {
     if (!loaded) return;
-    try { window.localStorage.setItem(KEY_FOLDERS, JSON.stringify(folders)); } catch (e) {}
+    try { window.localStorage.setItem(KEY_FOLDERS, JSON.stringify(folders)); } catch { /* storage unavailable */ }
   }, [folders, loaded]);
 
   /* close popup menu on outside click */
@@ -415,7 +430,6 @@ export default function Page() {
 
     if (!HF_TOKEN) {
       setMessages((m) => {
-        
         const c = m.slice();
         c[c.length - 1] = { role: "assistant", content: "Missing API token. Add NEXT_PUBLIC_HF_TOKEN=hf_xxx to .env.local, then restart the dev server." };
         return c;
@@ -449,7 +463,7 @@ export default function Page() {
           return c;
         });
       }
-    } catch (_err) {
+    } catch {
       if (controller.signal.aborted) {
         setMessages((m) => (m.length && m[m.length - 1].content === "" ? m.slice(0, -1) : m));
       } else {
@@ -533,14 +547,14 @@ export default function Page() {
   };
 
   const toggleMic = () => {
-    const w = window as any;
+    const w = window as unknown as SpeechWindow;
     const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
     if (!SR) { alert("Voice input isn't supported in this browser."); return; }
     if (listening && recRef.current) { recRef.current.stop(); return; }
     const r = new SR();
     r.interimResults = false;
-    r.onresult = (e: any) => {
-      const t: string = e.results[0][0].transcript;
+    r.onresult = (e) => {
+      const t = e.results[0][0].transcript;
       setInput((cur) => (cur ? cur + " " : "") + t);
     };
     r.onend = () => setListening(false);
